@@ -4,7 +4,7 @@ use std::io::Read;
 mod chip8;
 
 fn main() {
-    let filename = "roms/test_opcode.ch8";
+    let filename = "roms/BC_test.ch8";
     let mut file = File::open(&filename).expect("no file found");
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).expect("buffer overflow");
