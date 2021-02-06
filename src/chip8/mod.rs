@@ -10,6 +10,7 @@ use std::ops::{Index, IndexMut, RangeTo, Range, RangeInclusive};
 use std::time::Duration;
 
 use rand::prelude::*;
+use std::process::exit;
 
 struct PixelSize {
     width: u32,
@@ -27,11 +28,10 @@ impl Video {
     const BLACK: sdl2::pixels::Color = Color::RGB(0, 0, 0);
     const WHITE: sdl2::pixels::Color = Color::RGB(255, 255, 255);
 
-    pub fn new() -> Self {
+    pub fn new(sdl_context: &sdl2::Sdl) -> Self {
         let width = 800;
         let height = 600;
 
-        let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
         let window = video_subsystem.window("rust-sdl2 demo", width, height)
             .position_centered()
@@ -301,9 +301,96 @@ impl fmt::LowerHex for Registers {
     }
 }
 
+struct Keyboard {
+    event_pump: sdl2::EventPump,
+    bindings: [(u8, Keycode); 16],
+    memory: [u8; 16],
+}
+
+impl Keyboard {
+    // (Chip8 key, keyboard key)
+    const BINDINGS: [(u8, Keycode); 16] = [
+        (0x1, Keycode::Num1),
+        (0x2, Keycode::Num2),
+        (0x3, Keycode::Num3),
+        (0xC, Keycode::Num4),
+
+        (0x4, Keycode::Q),
+        (0x5, Keycode::W),
+        (0x6, Keycode::E),
+        (0xD, Keycode::R),
+
+        (0x7, Keycode::A),
+        (0x8, Keycode::S),
+        (0x9, Keycode::D),
+        (0xE, Keycode::F),
+
+        (0xA, Keycode::Z),
+        (0x0, Keycode::X),
+        (0xB, Keycode::C),
+        (0xF, Keycode::V),
+    ];
+
+    pub fn new(sdl_context: &sdl2::Sdl) -> Self {
+        Self {
+            event_pump: sdl_context.event_pump().unwrap(),
+            bindings: Self::BINDINGS,
+            memory: [0; 16]
+        }
+    }
+
+    pub fn is_key_pressed(&self, key: u8) -> bool {
+        self.memory[key as usize] == 1
+    }
+
+    pub fn first_pressed_key(&self) -> Option<u8> {
+        self.memory.iter().enumerate().find_map(|(i, &e)| if e == 1 { Some(i as u8) } else { None } )
+    }
+
+    pub fn is_any_key_pressed(&self) -> bool {
+        self.memory.iter().any(|&e| e == 1)
+    }
+
+    pub fn pool(&mut self) {
+        for event in self.event_pump.poll_iter() {
+            match event {
+                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                    exit(0);
+                },
+                Event::KeyDown { keycode, ..} => {
+                    println!("DOWN: {:?}", keycode.unwrap());
+
+                    let result = self.bindings.iter().find_map(|&(int, ext)| {
+                      if keycode.unwrap() == ext { Some(int) } else { None }
+                    });
+
+                    match result {
+                        Some(internal_number) => { self.memory[internal_number as usize] = 1; },
+                        _ => {}
+                    }
+                },
+                Event::KeyUp { keycode, ..} => {
+                    println!("UP: {:?}", keycode.unwrap());
+
+                    let result = self.bindings.iter().find_map(|&(int, ext)| {
+                        if keycode.unwrap() == ext { Some(int) } else { None }
+                    });
+
+                    match result {
+                        Some(internal_number) => { self.memory[internal_number as usize] = 0; },
+                        _ => {}
+                    }
+                },
+                _ => {}
+            }
+        }
+    }
+}
+
 pub struct Emulator {
     font: Font,
     video: Video,
+    keyboard: Keyboard,
     registers: Registers,
     memory: Memory,
     stack: Stack,
@@ -315,9 +402,11 @@ impl Emulator {
     const ROM_START: u16 = 512;
 
     pub fn new() -> Self {
+        let sdl_context = sdl2::init().unwrap();
         Self {
             font: Font::new(),
-            video: Video::new(),
+            video: Video::new(&sdl_context),
+            keyboard: Keyboard::new(&sdl_context),
             registers: Registers::new(),
             memory: Memory::new(),
             stack: Stack::new(),
@@ -327,9 +416,12 @@ impl Emulator {
     }
 
     pub fn exec_cycle(&mut self) {
-        self.video.refresh();
         let opcode = self.read_opcode();
         self.exec_opcode(&opcode);
+        self.video.refresh();
+        self.keyboard.pool();
+
+        std::thread::sleep(Duration::new(1, 1_000_000_000u32 / 60));
     }
 
     pub fn load_rom(&mut self, rom: &Vec<u8>) {
@@ -497,10 +589,16 @@ impl Emulator {
             }
             (0xE, _, 0x9, 0xE) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "SKP");
+                if self.keyboard.is_key_pressed(self.registers[opcode.x()]) {
+                    self.increment_pc();
+                }
                 self.increment_pc();
             }
             (0xE, _, 0xA, 0x1) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "SKNP");
+                if !self.keyboard.is_key_pressed(self.registers[opcode.x()]) {
+                    self.increment_pc();
+                }
                 self.increment_pc();
             }
             (0xF, _, 0x0, 0x7) => {
@@ -510,7 +608,9 @@ impl Emulator {
             }
             (0xF, _, 0x0, 0xA) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
-                //  TODO
+                if !self.keyboard.is_any_key_pressed() { return; }
+
+                self.registers[opcode.x()] = self.keyboard.first_pressed_key().unwrap();
                 self.increment_pc();
             }
             (0xF, _, 0x1, 0x5) => {
