@@ -1,6 +1,142 @@
+extern crate sdl2;
+
+use sdl2::pixels::Color;
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
+use sdl2::rect::Rect;
+
 use std::fmt;
-use std::ops::{Index,IndexMut,RangeTo};
+use std::ops::{Index, IndexMut, RangeTo, Range, RangeInclusive};
+use std::time::Duration;
+
 use rand::prelude::*;
+
+struct PixelSize {
+    width: u32,
+    height: u32,
+}
+
+struct Video {
+    canvas: sdl2::render::Canvas<sdl2::video::Window>,
+    memory: [u64; 32],
+    draw_flag: bool,
+    pixinfo: PixelSize,
+}
+
+impl Video {
+    const BLACK: sdl2::pixels::Color = Color::RGB(0, 0, 0);
+    const WHITE: sdl2::pixels::Color = Color::RGB(255, 255, 255);
+
+    pub fn new() -> Self {
+        let width = 800;
+        let height = 600;
+
+        let sdl_context = sdl2::init().unwrap();
+        let video_subsystem = sdl_context.video().unwrap();
+        let window = video_subsystem.window("rust-sdl2 demo", width, height)
+            .position_centered()
+            .build()
+            .unwrap();
+
+        let mut canvas = window.into_canvas().build().unwrap();
+        canvas.present();
+
+        Self {
+            canvas,
+            memory: [0; 32],
+            draw_flag: true,
+            pixinfo: PixelSize {
+                width: width / 64,
+                height: height / 32,
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.memory = [0; 32];
+    }
+
+    pub fn draw_sprite(&mut self, sprite: &Vec<u8>, x: u8, y: u8) -> u8 {
+        self.draw_flag = true;
+        let mut collision : u8 = 0;
+
+        for (sprite_line_index, sprite_pixel) in sprite.iter().enumerate() {
+            let line_num = y + sprite_line_index as u8;
+
+            for xi in 0..8 {
+                if sprite_pixel & (0x80 >> xi) != 0 {
+                    let offset = 63 - x - xi;
+                    let display_bit_p = 1 << offset;
+
+                    if (self.memory[line_num as usize] & display_bit_p) > 0 { collision = 1; }
+
+                    self.memory[line_num as usize] = self.memory[line_num as usize] ^ display_bit_p;
+                }
+            }
+        }
+
+        collision
+    }
+
+    pub fn refresh(&mut self) {
+        if !self.draw_flag { return; }
+
+        self.draw_flag = false;
+        self.canvas.clear();
+
+        for (line_index, line) in self.memory.iter().enumerate() {
+            for pixel_index in 0..64 {
+                let offset = 63 - pixel_index;
+                let pixel_value = (line & (1_u64 << offset)) >> offset;
+
+                if pixel_value == 1 {
+                    self.canvas.set_draw_color(Self::BLACK);
+                } else {
+                    self.canvas.set_draw_color(Self::WHITE);
+                }
+
+                let rect = Rect::new(
+                    pixel_index * self.pixinfo.width as i32,
+                    line_index as i32 * self.pixinfo.height as i32,
+                    self.pixinfo.width, self.pixinfo.height);
+
+                self.canvas.fill_rect(rect);
+            }
+        }
+
+        self.canvas.present();
+    }
+}
+
+struct Font {
+    memory: [u8; 80],
+}
+
+impl Font {
+    pub const START: u16 = 120;
+    pub const DEFAULT: [u8; 80] = [
+        0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+        0x20, 0x60, 0x20, 0x20, 0x70, // 1
+        0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+        0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+        0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+        0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+        0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+        0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+        0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+        0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+        0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+        0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+        0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+        0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+        0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+        0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+    ];
+
+    pub fn new() -> Self {
+        Self { memory: Self::DEFAULT }
+    }
+}
 
 struct Stack {
     values: [u16; 16],
@@ -21,9 +157,14 @@ impl Stack {
     }
 
     pub fn pop(&mut self) -> u16 {
-        let value = self.values[self.pointer];
         self.pointer = self.pointer - 1;
-        value
+        self.values[self.pointer]
+    }
+}
+
+impl fmt::Display for Stack {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, " stack_p: {}, stack_value: {:#x}, ", self.pointer, self.values[self.pointer])
     }
 }
 
@@ -77,6 +218,22 @@ impl IndexMut<usize> for Memory {
     }
 }
 
+impl Index<Range<usize>> for Memory {
+    type Output = [u8];
+
+    fn index(&self, index: Range<usize>) -> &[u8] {
+        &self.0[..][index]
+    }
+}
+
+impl Index<Range<u16>> for Memory {
+    type Output = [u8];
+
+    fn index(&self, index: Range<u16>) -> &[u8] {
+        &self.0[..][(index.start as usize)..(index.end as usize)]
+    }
+}
+
 struct Registers([u8; 16]);
 impl Registers {
     pub fn new() -> Self {
@@ -112,6 +269,22 @@ impl IndexMut<u8> for Registers {
     }
 }
 
+impl Index<Range<usize>> for Registers {
+    type Output = [u8];
+
+    fn index(&self, index: Range<usize>) -> &[u8] {
+        &self.0[..][index]
+    }
+}
+
+impl Index<RangeInclusive<usize>> for Registers {
+    type Output = [u8];
+
+    fn index(&self, index: RangeInclusive<usize>) -> &[u8] {
+        &self.0[..][index]
+    }
+}
+
 impl Index<RangeTo<usize>> for Registers {
     type Output = [u8];
 
@@ -120,8 +293,17 @@ impl Index<RangeTo<usize>> for Registers {
     }
 }
 
+impl fmt::LowerHex for Registers {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "[");
+        for e in self.0.iter() { write!(fmt, "{:x}, ", *e); }
+        write!(fmt, "]")
+    }
+}
 
 pub struct Emulator {
+    font: Font,
+    video: Video,
     registers: Registers,
     memory: Memory,
     stack: Stack,
@@ -130,8 +312,12 @@ pub struct Emulator {
 }
 
 impl Emulator {
+    const ROM_START: u16 = 512;
+
     pub fn new() -> Self {
         Self {
+            font: Font::new(),
+            video: Video::new(),
             registers: Registers::new(),
             memory: Memory::new(),
             stack: Stack::new(),
@@ -141,33 +327,36 @@ impl Emulator {
     }
 
     pub fn exec_cycle(&mut self) {
+        self.video.refresh();
         let opcode = self.read_opcode();
         self.exec_opcode(&opcode);
     }
 
-    pub fn with_rom(rom: &Vec<u8>) -> Self {
-        let mut emu = Self::new();
-        emu.load_rom(rom, 512);
-        emu
+    pub fn load_rom(&mut self, rom: &Vec<u8>) {
+        let ustart = Self::ROM_START as usize;
+        for (i, e) in rom.iter().enumerate() { self.memory[ustart + i] = *e; }
+        self.pc = ustart as usize;
     }
 
-    fn load_rom(&mut self, rom: &Vec<u8>, start: usize) {
-        for (i, e) in rom.iter().enumerate() { self.memory[start + i] = *e; }
-        self.pc = start as usize;
+    pub fn load_font(&mut self) {
+        for (i, e) in self.font.memory.iter().enumerate() {
+            self.memory[Font::START as usize + i] = *e;
+        }
     }
 
     pub fn is_running(&self) -> bool {
-        self.pc < self.memory.size() && self.pc != 0x30e
+        self.pc < self.memory.size() // && self.pc != 0x3dc
     }
 
     fn exec_opcode(&mut self, opcode : &Opcode) {
         match opcode.nibbles() {
-            (0x0, 0x0, 0x0, 0x0) => {
+            (0x0, _, _, 0x0) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "CLEAR");
-                // video.clear();
+                self.video.clear();
                 self.increment_pc();
             }
-            (0x0, 0x0, 0x0, 0xE) => {
+            (0x0, _, _, 0xE) => {
+                println!("{}, op: {:x}, mem: {}", self.state(), opcode, "self.pc = self.stack.pop() as usize;");
                 self.pc = self.stack.pop() as usize;
                 self.increment_pc();
             }
@@ -176,7 +365,7 @@ impl Emulator {
                 self.pc = opcode.nnn() as usize;
             }
             (0x2, _, _, _) => {
-                println!("{}, op: {:x}, mem: {}", self.state(), opcode, "CA;;");
+                println!("{}, op: {:x}, mem: {}", self.state(), opcode, "CALL");
                 self.stack.push(self.pc as u16);
                 self.pc = opcode.nnn() as usize;
             }
@@ -298,6 +487,12 @@ impl Emulator {
             }
             (0xD, _, _, _) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "DRW");
+                let sprite = self.memory[self.i..(self.i + opcode.n() as u16)].to_vec();
+
+                self.registers[0xF_u16] = self.video.draw_sprite(&sprite,
+                    self.registers[opcode.x()],
+                    self.registers[opcode.y()]);
+
                 self.increment_pc();
             }
             (0xE, _, 0x9, 0xE) => {
@@ -310,18 +505,22 @@ impl Emulator {
             }
             (0xF, _, 0x0, 0x7) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
+                self.registers[opcode.x()] = 0_u8;
                 self.increment_pc();
             }
             (0xF, _, 0x0, 0xA) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
+                //  TODO
                 self.increment_pc();
             }
             (0xF, _, 0x1, 0x5) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
+                // TODO
                 self.increment_pc();
             }
             (0xF, _, 0x1, 0x8) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
+                //  TODO
                 self.increment_pc();
             }
             (0xF, _, 0x1, 0xE) => {
@@ -331,33 +530,53 @@ impl Emulator {
             }
             (0xF, _, 0x2, 0x9) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
+                self.i = Font::START + (self.memory[self.registers[opcode.x()] as usize] * 5) as u16;
                 self.increment_pc();
             }
             (0xF, _, 0x3, 0x3) => {
-                println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
-                self.memory[self.i] = self.registers[opcode.x()] / 100;
-                self.memory[self.i + 1] = (self.registers[opcode.x()] / 10) % 10;
-                self.memory[self.i + 2] = self.registers[opcode.x()] % 10;
+                print!("{}, op: {:x}, mem: {} ||=> ", self.state(), opcode, "LD");
+                let reg_x = self.registers[opcode.x()];
+
+                print!("reg_x: {}, ", reg_x);
+                print!("BEFORE:, memory[i..i+2] = [{}, {}, {}] => ",
+                    self.memory[self.i],
+                    self.memory[self.i + 1],
+                    self.memory[self.i + 2]);
+
+                self.memory[self.i] = reg_x / 100;
+                self.memory[self.i + 1] = (reg_x / 10) % 10;
+                self.memory[self.i + 2] = reg_x % 10;
+
+                println!("AFTER: memory[i..i+2] = [{}, {}, {}]",
+                     self.memory[self.i],
+                     self.memory[self.i + 1],
+                     self.memory[self.i + 2]);
+
                 self.increment_pc();
             }
             (0xF, _, 0x5, 0x5) => {
-                println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
+                print!("{}, op: {:x}, mem: {} ||=> ", self.state(), opcode, "LD");
                 let x = opcode.x() as usize;
-                for (i, e) in self.registers[..x].iter().enumerate() {
+
+                print!("x: {}, registers[0..=x] = [", x);
+                for (i, e) in self.registers[0..=x].iter().enumerate() {
+                    print!("{} ", *e);
                     self.memory[self.i + i as u16] = *e;
                 }
+                println!("]");
+
                 self.increment_pc();
             }
             (0xF, _, 0x6, 0x5) => {
                 println!("{}, op: {:x}, mem: {}", self.state(), opcode, "LD");
-                for i in 0..opcode.x() {
+                for i in 0..=opcode.x() {
                     self.registers[i] = self.memory[self.i + i as u16];
                 }
                 self.increment_pc();
             }
             (_,_,_,_) => {
                 self.increment_pc();
-                println!("UNKNOWN");
+                println!("UNKNOWN: {:x}", opcode);
             }
         }
     }
@@ -373,7 +592,7 @@ impl Emulator {
         self.pc = self.pc + 2;
     }
 
-    pub fn state(&self) -> String { format!("pc: {:#x}", self.pc) }
+    pub fn state(&self) -> String { format!("pc: {:#x}, reg: {:x}, stack: {}", self.pc, self.registers, self.stack) }
 }
 
 pub struct Opcode {
