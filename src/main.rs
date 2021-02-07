@@ -14,8 +14,9 @@ fn main() {
     let mut cpu = chip8::Emulator::new();
     cpu.load_rom(&rom_buffer, );
     cpu.load_font();
+    cpu.run();
 
-    while cpu.is_running() {
-        cpu.exec_cycle()
-    }
+    // while cpu.is_running() {
+    //     cpu.exec_cycle()
+    // }
 }

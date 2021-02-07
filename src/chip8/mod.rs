@@ -7,7 +7,7 @@ use sdl2::rect::Rect;
 
 use std::fmt;
 use std::ops::{Index, IndexMut, RangeTo, Range, RangeInclusive};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rand::prelude::*;
 use std::process::exit;
@@ -396,10 +396,13 @@ pub struct Emulator {
     stack: Stack,
     pc: usize,
     i: u16,
+    delay_timer: u16,
 }
 
 impl Emulator {
     const ROM_START: u16 = 512;
+    const TIMER_HZ: u32 = 60;
+    const HZ: u32 = 500;
 
     pub fn new() -> Self {
         let sdl_context = sdl2::init().unwrap();
@@ -412,16 +415,30 @@ impl Emulator {
             stack: Stack::new(),
             pc: 0,
             i: 0,
+            delay_timer: 0,
         }
     }
 
-    pub fn exec_cycle(&mut self) {
-        let opcode = self.read_opcode();
-        self.exec_opcode(&opcode);
-        self.video.refresh();
-        self.keyboard.pool();
+    pub fn run(&mut self) {
+        let mut emulator_step_duration = Duration::new(
+            0, 1_000_000_000u32 / Self::HZ);
 
-        std::thread::sleep(Duration::new(1, 1_000_000_000u32 / 60));
+        while self.is_running() {
+            let start = Instant::now();
+            for _ in 0..Self::HZ {
+                self.exec_opcode(&self.read_opcode());
+                self.keyboard.pool();
+                self.video.refresh();
+            }
+            let opcodes_exec_time = Instant::now().duration_since(start);
+
+            if opcodes_exec_time >= emulator_step_duration {
+                std::thread::sleep(Duration::new(0, 0));
+            } else {
+                let sleep_time = emulator_step_duration - opcodes_exec_time;
+                std::thread::sleep(Duration::new(0, sleep_time.as_nanos() as u32));
+            }
+        }
     }
 
     pub fn load_rom(&mut self, rom: &Vec<u8>) {
@@ -692,7 +709,9 @@ impl Emulator {
         self.pc = self.pc + 2;
     }
 
-    pub fn state(&self) -> String { format!("pc: {:#x}, reg: {:x}, stack: {}", self.pc, self.registers, self.stack) }
+    pub fn state(&self) -> String {
+        format!("pc: {:#x}, reg: {:x}, stack: {}", self.pc, self.registers, self.stack)
+    }
 }
 
 pub struct Opcode {
