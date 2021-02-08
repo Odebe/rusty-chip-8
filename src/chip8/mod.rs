@@ -33,7 +33,7 @@ impl Video {
         let height = 600;
 
         let video_subsystem = sdl_context.video().unwrap();
-        let window = video_subsystem.window("rust-sdl2 demo", width, height)
+        let window = video_subsystem.window("rusty-chip-8", width, height)
             .position_centered()
             .build()
             .unwrap();
@@ -63,7 +63,7 @@ impl Video {
         for (sprite_line_index, sprite_pixel) in sprite.iter().enumerate() {
             let line_num = y + sprite_line_index as u8;
 
-            for xi in 0..8 {
+            for xi in 0..=7 {
                 if sprite_pixel & (0x80 >> xi) != 0 {
                     let offset = 63 - x - xi;
                     let display_bit_p = 1 << offset;
@@ -401,8 +401,8 @@ pub struct Emulator {
 
 impl Emulator {
     const ROM_START: u16 = 512;
-    const TIMER_HZ: u32 = 60;
-    const HZ: u32 = 500;
+    const TIMER_HZ: u32 = 10;
+    const HZ: u32 = 20;
 
     pub fn new() -> Self {
         let sdl_context = sdl2::init().unwrap();
@@ -420,18 +420,17 @@ impl Emulator {
     }
 
     pub fn run(&mut self) {
-        let mut emulator_step_duration = Duration::new(
+        let emulator_step_duration = Duration::new(
             0, 1_000_000_000u32 / Self::HZ);
 
         while self.is_running() {
             let start = Instant::now();
             for _ in 0..Self::HZ {
-                self.exec_opcode(&self.read_opcode());
                 self.keyboard.pool();
+                self.exec_opcode(&self.read_opcode());
                 self.video.refresh();
             }
             let opcodes_exec_time = Instant::now().duration_since(start);
-
             if opcodes_exec_time >= emulator_step_duration {
                 std::thread::sleep(Duration::new(0, 0));
             } else {
